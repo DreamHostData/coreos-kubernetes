@@ -4,6 +4,10 @@ set -e
 # List of etcd servers (http://ip:port), comma separated
 export ETCD_ENDPOINTS=
 
+export ETCD_CERTFILE=
+export ETCD_KEYFILE=
+export ETCD_CAFILE=
+
 # Specify the version (vX.Y.Z) of Kubernetes assets to deploy
 export K8S_VER=v1.2.4_coreos.1
 
@@ -62,6 +66,13 @@ function init_config {
     else
         export K8S_NETWORK_PLUGIN=""
     fi
+
+    IFS=',' read -r ETCDCTL_ENDPOINT <<< "$ETCD_ENDPOINTS"
+
+    export ETCDCTL_ENDPOINT=$ETCDCTL_ENDPOINT
+    export ETCDCTL_CERT_FILE=$ETCD_CERTFILE
+    export ETCDCTL_KEY_FILE=$ETCD_KEYFILE
+    export ETCDCTL_CA_FILE=$ETCD_CAFILE
 }
 
 function init_flannel {
@@ -71,7 +82,7 @@ function init_flannel {
         IFS=',' read -ra ES <<< "$ETCD_ENDPOINTS"
         for ETCD in "${ES[@]}"; do
             echo "Trying: $ETCD"
-            if [ -n "$(curl --silent "$ETCD/v2/machines")" ]; then
+            if [ -n "$(/usr/bin/etcdctl cluster-health)" ]; then
                 local ACTIVE_ETCD=$ETCD
                 break
             fi
@@ -81,8 +92,8 @@ function init_flannel {
             break
         fi
     done
-    RES=$(curl --silent -X PUT -d "value={\"Network\":\"$POD_NETWORK\",\"Backend\":{\"Type\":\"vxlan\"}}" "$ACTIVE_ETCD/v2/keys/coreos.com/network/config?prevExist=false")
-    if [ -z "$(echo $RES | grep '"action":"create"')" ] && [ -z "$(echo $RES | grep 'Key already exists')" ]; then
+    RES=$(/usr/bin/etcdctl set /coreos.com/network/config "{\"Network\":\"$POD_NETWORK\", \"Backend\": {\"Type\": \"vxlan\"}}")
+    if ! [ $? -eq 0 ]; then
         echo "Unexpected error configuring flannel pod network: $RES"
     fi
 }
@@ -202,6 +213,9 @@ spec:
     - apiserver
     - --bind-address=0.0.0.0
     - --etcd-servers=${ETCD_ENDPOINTS}
+    - --etcd-certfile=${ETCD_CERTFILE}
+    - --etcd-keyfile=${ETCD_KEYFILE}
+    - --etcd-cafile=${ETCD_CAFILE}
     - --allow-privileged=true
     - --service-cluster-ip-range=${SERVICE_IP_RANGE}
     - --secure-port=443
@@ -751,6 +765,9 @@ EOF
         cat << EOF > $TEMPLATE
 FLANNELD_IFACE=$ADVERTISE_IP
 FLANNELD_ETCD_ENDPOINTS=$ETCD_ENDPOINTS
+FLANNELD_ETCD_CERTFILE=${ETCD_CERTFILE}
+FLANNELD_ETCD_KEYFILE=${ETCD_KEYFILE}
+FLANNELD_ETCD_CAFILE=${ETCD_CAFILE}
 EOF
     }
 
